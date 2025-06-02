@@ -1,4 +1,5 @@
 Add-Type -AssemblyName PresentationFramework
+Add-Type -AssemblyName Microsoft.VisualBasic
 
 # IMPORTANT: Save this file as UTF-8 for emoji support!
 
@@ -190,48 +191,34 @@ function Show-Home {
     $userPanel.Margin = '0,0,0,16'
     $userPanel.VerticalAlignment = 'Top'
 
-    # Try to get user profile picture (fallback to default)
-    $avatar = New-Object Windows.Controls.Image
-    $avatar.Width = 48
-    $avatar.Height = 48
-    $avatar.Margin = '0,0,12,0'
-    $defaultAvatarUrl = 'https://i.imgur.com/8Km9tLL.png'
-    try {
-        $userImgPath = "$env:APPDATA\Microsoft\Windows\AccountPictures"
-        $img = Get-ChildItem $userImgPath -Filter *.accountpicture-ms | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-        if ($img) {
-            $avatar.Source = [Windows.Media.Imaging.BitmapImage]::new([Uri]::new($img.FullName))
-        } else {
-            $avatar.Source = [Windows.Media.Imaging.BitmapImage]::new([Uri]::new($defaultAvatarUrl))
-        }
-    } catch {
-        $avatar.Source = [Windows.Media.Imaging.BitmapImage]::new([Uri]::new($defaultAvatarUrl))
+    # Only show avatar if user has uploaded one
+    if ($global:profile.avatar -and (Test-Path $global:profile.avatar)) {
+        $avatar = New-Object Windows.Controls.Image
+        $avatar.Width = 48
+        $avatar.Height = 48
+        $avatar.Margin = '0,0,12,0'
+        $bmp = New-Object Windows.Media.Imaging.BitmapImage
+        $bmp.BeginInit(); $bmp.UriSource = [Uri]::new((Resolve-Path $global:profile.avatar)); $bmp.DecodePixelWidth = 48; $bmp.EndInit()
+        $avatar.Source = $bmp
+        $userPanel.Children.Add($avatar)
     }
 
     # User info
     $userInfo = New-Object Windows.Controls.StackPanel
     $userInfo.Orientation = 'Vertical'
-
-    # Use profile username if available
-    $displayName = $env:USERNAME
-    if ($global:profile -and $global:profile.username) { $displayName = $global:profile.username }
+    $displayName = $global:profile.username
     $greeting = New-Object Windows.Controls.TextBlock
     $greeting.Text = "Welcome, $displayName!"
     $greeting.FontWeight = 'Bold'
     $greeting.FontSize = 16
     $greeting.Foreground = [Windows.Media.Brushes]::Cyan
-
     $machine = New-Object Windows.Controls.TextBlock
     $machine.Text = "Machine: $env:COMPUTERNAME"
     $machine.FontSize = 12
     $machine.Foreground = [Windows.Media.Brushes]::Gray
-
     $userInfo.Children.Add($greeting)
     $userInfo.Children.Add($machine)
-
-    $userPanel.Children.Add($avatar)
     $userPanel.Children.Add($userInfo)
-
     $panel.Children.Insert(0, $userPanel)
 
     $welcome = New-Object Windows.Controls.TextBlock
@@ -468,183 +455,114 @@ function Show-AdminDashboard {
     }
     $panel.Children.Add($keysScroll)
 
-    # Update Button
-    $updateBtn = New-Object Windows.Controls.Button
-    $updateBtn.Content = 'Update (Push to GitHub)'
-    $updateBtn.Style = $window.Resources['NeonButton']
-    $updateBtn.Margin = '0,16,0,0'
-    $panel.Children.Add($updateBtn)
+    # Update Button (only for super admin)
+    if ($global:profile.isSuperAdmin -eq $true) {
+        $updateBtn = New-Object Windows.Controls.Button
+        $updateBtn.Content = 'Update (Push to GitHub)'
+        $updateBtn.Style = $window.Resources['NeonButton']
+        $updateBtn.Margin = '0,16,0,0'
+        $updateBtn.Add_Click({
+            try {
+                # Stage both profiles.json and keys.json
+                git add profiles.json keys.json | Out-Null
+                # Commit with a standard message
+                git commit -m "Update profiles and keys from admin dashboard" | Out-Null
+                # Push to GitHub
+                git push | Out-Null
+                [System.Windows.MessageBox]::Show('Profiles and keys pushed to GitHub!')
+            } catch {
+                [System.Windows.MessageBox]::Show('Error pushing to GitHub: ' + $_)
+            }
+        })
+        $panel.Children.Add($updateBtn)
+    }
 
     $scroll.Content = $panel
     $main.Children.Add($scroll)
 }
 
-# Navigation logic
-$isAdmin = $false
-if ($profile -and $profile.isAdmin -eq $true) { $isAdmin = $true }
+# --- GitHub Cloud-First Auth & Profile Management ---
 
-$sidebar = @(
-    @{Btn='HomeTab'; Show={ Show-Home }},
-    @{Btn='InputDelayTab'; Show={ Show-Placeholder 'Input Delay Tweaks' }},
-    @{Btn='WindowsTweaksTab'; Show={ Show-Placeholder 'Windows Tweaks' }},
-    @{Btn='LatencyTab'; Show={ Show-Placeholder 'Latency Tweaks' }},
-    @{Btn='ControllerTab'; Show={ Show-Placeholder 'Controller Tweaks' }},
-    @{Btn='UtilSettingsTab'; Show={ Show-Placeholder 'Util Settings' }}
-)
-if ($isAdmin) {
-    $sidebar += @{Btn='AdminTab'; Show={ Show-AdminDashboard }}
-    # Add AdminTab button to UI
-    $adminBtn = New-Object Windows.Controls.Button
-    $adminBtn.Name = 'AdminTab'
-    $adminBtn.Content = '[A] Admin'
-    $adminBtn.Style = $window.Resources['TabButton']
-    $adminBtn.Margin = '4,8,4,8'
-    $adminBtn.Padding = '20,8'
-    $adminBtn.MinWidth = 160
-    $adminBtn.Add_Click({ Show-AdminDashboard })
-    $tabBar = $window.Content.Children[0] # Top StackPanel
-    $tabBar.Children.Add($adminBtn)
-}
-foreach ($item in $sidebar) {
-    $btn = $window.FindName($item.Btn)
-    $localShow = $item.Show
-    $btn.Add_Click({
-        $localShow.Invoke()
-    })
+# Hard-coded GitHub token (for private repo use only)
+$global:GITHUB_TOKEN = "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"
+
+# Prompt for username using VisualBasic InputBox
+if (-not $global:USERNAME) {
+    $global:USERNAME = [Microsoft.VisualBasic.Interaction]::InputBox('Enter your username:', 'Username')
 }
 
-# Helper: Load/Save JSON
-function Load-JsonFile($path) {
-    if (Test-Path $path) {
-        Get-Content $path -Raw | ConvertFrom-Json
-    } else {
-        @()
+# GitHub API helpers
+function Get-GitHubFile {
+    param (
+        [string]$repo,
+        [string]$path,
+        [string]$branch = "main"
+    )
+    $url = "https://api.github.com/repos/$repo/contents/$path?ref=$branch"
+    $headers = @{ Authorization = "token $global:GITHUB_TOKEN"; "User-Agent" = "CircleUtility" }
+    try {
+        $response = Invoke-RestMethod -Uri $url -Headers $headers
+        $content = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($response.content))
+        return $content
+    } catch {
+        [System.Windows.MessageBox]::Show('Failed to fetch ' + $path + ' from GitHub. Check your token and network.')
+        exit
     }
 }
-function Save-JsonFile($path, $data) {
-    $data | ConvertTo-Json -Depth 5 | Set-Content $path
+
+function Update-GitHubFile {
+    param (
+        [string]$repo,
+        [string]$path,
+        [string]$content,
+        [string]$message = "Update via Circle Utility",
+        [string]$branch = "main"
+    )
+    $url = "https://api.github.com/repos/$repo/contents/$path"
+    $headers = @{ Authorization = "token $global:GITHUB_TOKEN"; "User-Agent" = "CircleUtility" }
+    # Get current SHA
+    $getResp = Invoke-RestMethod -Uri "$url?ref=$branch" -Headers $headers
+    $sha = $getResp.sha
+    $body = @{
+        message = $message
+        content = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($content))
+        branch = $branch
+        sha = $sha
+    } | ConvertTo-Json
+    try {
+        Invoke-RestMethod -Uri $url -Headers $headers -Method Put -Body $body
+    } catch {
+        [System.Windows.MessageBox]::Show('Failed to update ' + $path + ' on GitHub. Check your token and network.')
+        exit
+    }
 }
 
-# Sign-Up/Profile Creation Window (WPF/XAML)
-function Show-SignUpWindow {
-    $signupXaml = @"
-<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        Title="Sign Up" Height="420" Width="350" WindowStartupLocation="CenterScreen" Background="#181A20">
-    <Grid Margin="20">
-        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Width="280" >
-            <TextBlock Text="Sign Up" FontSize="24" Foreground="#39FF14" FontWeight="Bold" HorizontalAlignment="Center" Margin="0,0,0,8"/>
-            <TextBlock Text="One-Time Key" Foreground="White"/>
-            <TextBox Name="KeyBox" Height="30" Background="#23272F" Foreground="White" BorderBrush="#39FF14"/>
-            <TextBlock Text="Username" Foreground="White" Margin="0,8,0,0"/>
-            <TextBox Name="UsernameBox" Height="30" Background="#23272F" Foreground="White" BorderBrush="#39FF14"/>
-            <TextBlock Text="Avatar (optional)" Foreground="White" Margin="0,8,0,0"/>
-            <Button Name="AvatarButton" Content="Choose Avatar" Height="30" Background="#23272F" Foreground="#39FF14" Margin="0,0,0,4"/>
-            <Image Name="AvatarPreview" Height="60" Width="60" Margin="0,0,0,8"/>
-            <Button Name="SubmitButton" Content="Create Profile" Height="35" Background="#39FF14" Foreground="Black" FontWeight="Bold"/>
-            <TextBlock Name="StatusText" Foreground="Red" FontWeight="Bold" TextAlignment="Center" Margin="0,8,0,0"/>
-        </StackPanel>
-    </Grid>
-</Window>
-"@
-    $sr = New-Object System.IO.StringReader $signupXaml
-    $xr = [System.Xml.XmlReader]::Create($sr)
-    $signupWindow = [Windows.Markup.XamlReader]::Load($xr)
-    $KeyBox = $signupWindow.FindName('KeyBox')
-    $UsernameBox = $signupWindow.FindName('UsernameBox')
-    $AvatarButton = $signupWindow.FindName('AvatarButton')
-    $AvatarPreview = $signupWindow.FindName('AvatarPreview')
-    $SubmitButton = $signupWindow.FindName('SubmitButton')
-    $StatusText = $signupWindow.FindName('StatusText')
-    $avatarPath = $null
+# Load profiles and keys from GitHub
+$repo = "AquaknowsJava/CircleUtility"
+$profilesJson = Get-GitHubFile -repo $repo -path "profiles.json"
+$profiles = $profilesJson | ConvertFrom-Json
+$keysJson = Get-GitHubFile -repo $repo -path "keys.json"
+$keys = $keysJson | ConvertFrom-Json
 
-    # Avatar selection logic
-    $AvatarButton.Add_Click({
-        $ofd = New-Object System.Windows.Forms.OpenFileDialog
-        $ofd.Filter = "Image Files (*.png;*.jpg;*.jpeg)|*.png;*.jpg;*.jpeg"
-        if ($ofd.ShowDialog() -eq 'OK') {
-            $avatarPath = $ofd.FileName
-            $bmp = New-Object Windows.Media.Imaging.BitmapImage
-            $bmp.BeginInit()
-            $bmp.UriSource = [Uri]::new($avatarPath)
-            $bmp.DecodePixelWidth = 60
-            $bmp.EndInit()
-            $AvatarPreview.Source = $bmp
-        }
-    })
-
-    # Submit logic
-    $SubmitButton.Add_Click({
-        $key = $KeyBox.Text.Trim()
-        $username = $UsernameBox.Text.Trim()
-        $StatusText.Text = ""
-        $keysPath = "./keys.json"
-        $profilesPath = "./profiles.json"
-        if (-not (Test-Path $keysPath)) { $keysPath = "./keys_template.json" }
-        if (-not (Test-Path $profilesPath)) { $profilesPath = "./profiles_template.json" }
-        $keys = Load-JsonFile $keysPath
-        $profiles = Load-JsonFile $profilesPath
-        # Validate key
-        $keyObj = $keys | Where-Object { $_.key -eq $key -and $_.used -eq $false }
-        if (-not $keyObj) {
-            $StatusText.Text = "Invalid or already used key."
-            return
-        }
-        # Validate username
-        if ($profiles | Where-Object { $_.username -eq $username }) {
-            $StatusText.Text = "Username already taken."
-            return
-        }
-        if ($username.Length -lt 3) {
-            $StatusText.Text = "Username too short."
-            return
-        }
-        # Save avatar if selected
-        $avatarRelPath = $null
-        if ($avatarPath) {
-            $avatarsDir = "./avatars"
-            if (-not (Test-Path $avatarsDir)) { New-Item -ItemType Directory -Path $avatarsDir | Out-Null }
-            $ext = [System.IO.Path]::GetExtension($avatarPath)
-            $avatarRelPath = "$avatarsDir/$username$ext"
-            Copy-Item $avatarPath $avatarRelPath -Force
-        }
-        # Create profile
-        $profile = [PSCustomObject]@{
-            username = $username
-            machineId = (Get-WmiObject -Class Win32_ComputerSystemProduct).UUID
-            avatar = $avatarRelPath
-            isAdmin = $false
-            created = (Get-Date).ToString("o")
-        }
-        $profiles += $profile
-        # Mark key as used
-        $keyObj.used = $true
-        $keyObj.usedBy = $username
-        # Save
-        Save-JsonFile $profilesPath $profiles
-        Save-JsonFile $keysPath $keys
-        $StatusText.Foreground = 'Green'
-        $StatusText.Text = "Profile created! You can now sign in."
-        Start-Sleep -Seconds 1.5
-        $signupWindow.Close()
-    })
-    $signupWindow.ShowDialog() | Out-Null
+# Authenticate user
+$global:profile = $profiles | Where-Object { $_.username -eq $global:USERNAME }
+if (-not $global:profile) {
+    [System.Windows.MessageBox]::Show('User not found in profiles.json!')
+    exit
 }
 
-# Check for existing profile (simple: by machineId)
-function Get-CurrentProfile {
-    $profilesPath = "./profiles.json"
-    if (-not (Test-Path $profilesPath)) { $profilesPath = "./profiles_template.json" }
-    $profiles = Load-JsonFile $profilesPath
-    $machineId = (Get-WmiObject -Class Win32_ComputerSystemProduct).UUID
-    return $profiles | Where-Object { $_.machineId -eq $machineId }
-}
+# Set rights
+$isAdmin = $false
+$isSuperAdmin = $false
+if ($global:profile.isAdmin -eq $true) { $isAdmin = $true }
+if ($global:profile.isSuperAdmin -eq $true) { $isSuperAdmin = $true }
 
 # Main entry: show sign-up if no profile, else continue
-$profile = Get-CurrentProfile
-if (-not $profile) {
+$global:profile = Get-CurrentProfile
+if (-not $global:profile) {
     Show-SignUpWindow
-    $profile = Get-CurrentProfile
-    if (-not $profile) { exit }
+    $global:profile = Get-CurrentProfile
+    if (-not $global:profile) { exit }
 }
 
 # Super Admin protection at startup
