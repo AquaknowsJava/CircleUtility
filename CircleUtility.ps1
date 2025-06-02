@@ -425,9 +425,9 @@ function Show-AdminDashboard {
     $keysTitle.Margin = '0,12,0,4'
     $panel.Children.Add($keysTitle)
 
-    $keysPath = "./keys.json"
-    if (-not (Test-Path $keysPath)) { $keysPath = "./keys_template.json" }
-    $keys = Load-JsonFile $keysPath
+    $repo = "AquaknowsJava/CircleUtility"
+    $keysJson = Get-GitHubFile -repo $repo -path "keys.json"
+    $keys = $keysJson | ConvertFrom-Json
     $keysList = New-Object Windows.Controls.StackPanel
     $keysList.Orientation = 'Vertical'
     $keysList.MaxHeight = 180
@@ -450,6 +450,13 @@ function Show-AdminDashboard {
         $revokeBtn.Margin = '8,0,0,0'
         $revokeBtn.Style = $window.Resources['DangerButton']
         $revokeBtn.IsEnabled = $key.used -eq $false
+        $revokeBtn.Add_Click({
+            $key.used = $true
+            $key.usedBy = 'revoked'
+            Update-GitHubFile -repo $repo -path "keys.json" -content ($keys | ConvertTo-Json -Depth 5) -message "Revoke key $($key.key)"
+            [System.Windows.MessageBox]::Show('Key revoked and synced to GitHub!')
+            Show-AdminDashboard
+        })
         $row.Children.Add($revokeBtn)
         $keysList.Children.Add($row)
     }
@@ -538,11 +545,8 @@ function Update-GitHubFile {
 }
 
 # Load profiles and keys from GitHub
-$repo = "AquaknowsJava/CircleUtility"
 $profilesJson = Get-GitHubFile -repo $repo -path "profiles.json"
 $profiles = $profilesJson | ConvertFrom-Json
-$keysJson = Get-GitHubFile -repo $repo -path "keys.json"
-$keys = $keysJson | ConvertFrom-Json
 
 # Authenticate user
 $global:profile = $profiles | Where-Object { $_.username -eq $global:USERNAME }
