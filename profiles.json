@@ -1,14 +1,10 @@
-[
-  {
-    "username": "Arsenal",
-    "machineId": "DB6CD63A-6642-EF1F-AD4B-D843AE243671",
-    "avatar": null,
-    "isAdmin": true,
-    "isSuperAdmin": true,
-    "created": "2024-06-07T12:00:00Z"
-  }
-<<<<<<< HEAD
-] 
-=======
-]
->>>>>>> 3ced93f0147ff74351892d109dc258f402b01411
+   [
+     {
+       "username": "Arsenal",
+       "machineId": "DB6CD63A-6642-EF1F-AD4B-D843AE243671",
+       "avatar": null,
+       "isAdmin": true,
+       "isSuperAdmin": true,
+       "created": "2024-06-07T12:00:00Z"
+     }
+   ]
