@@ -212,12 +212,11 @@ function Show-Home {
     $userInfo = New-Object Windows.Controls.StackPanel
     $userInfo.Orientation = 'Vertical'
 
-    $userName = $env:USERNAME
-    $fullName = (Get-CimInstance Win32_UserAccount | Where-Object { $_.Name -eq $userName }).FullName
-    if (-not $fullName) { $fullName = $userName }
-
+    # Use profile username if available
+    $displayName = $env:USERNAME
+    if ($global:profile -and $global:profile.username) { $displayName = $global:profile.username }
     $greeting = New-Object Windows.Controls.TextBlock
-    $greeting.Text = "Welcome, $fullName!"
+    $greeting.Text = "Welcome, $displayName!"
     $greeting.FontWeight = 'Bold'
     $greeting.FontSize = 16
     $greeting.Foreground = [Windows.Media.Brushes]::Cyan
@@ -349,7 +348,141 @@ function Show-Placeholder($title) {
     $main.Children.Add($tb)
 }
 
+# Admin Dashboard UI
+function Show-AdminDashboard {
+    $main = $window.FindName('MainContent')
+    $main.Children.Clear()
+    $scroll = New-Object Windows.Controls.ScrollViewer
+    $scroll.VerticalScrollBarVisibility = 'Auto'
+    $panel = New-Object Windows.Controls.StackPanel
+    $panel.Margin = '24'
+    $panel.HorizontalAlignment = 'Center'
+    $panel.VerticalAlignment = 'Top'
+
+    # Title
+    $title = New-Object Windows.Controls.TextBlock
+    $title.Text = 'Admin Dashboard'
+    $title.FontSize = 28
+    $title.FontWeight = 'Bold'
+    $title.Foreground = [Windows.Media.Brushes]::Cyan
+    $title.Margin = '0,0,0,16'
+    $panel.Children.Add($title)
+
+    # Users Section
+    $usersTitle = New-Object Windows.Controls.TextBlock
+    $usersTitle.Text = 'Users:'
+    $usersTitle.FontSize = 20
+    $usersTitle.FontWeight = 'Bold'
+    $usersTitle.Foreground = [Windows.Media.Brushes]::White
+    $usersTitle.Margin = '0,12,0,4'
+    $panel.Children.Add($usersTitle)
+
+    $profilesPath = "./profiles.json"
+    if (-not (Test-Path $profilesPath)) { $profilesPath = "./profiles_template.json" }
+    $profiles = Load-JsonFile $profilesPath
+    $usersList = New-Object Windows.Controls.StackPanel
+    $usersList.Orientation = 'Vertical'
+    $usersList.MaxHeight = 180
+    $usersList.Margin = '0,0,0,8'
+    $usersList.Background = [Windows.Media.Brushes]::Transparent
+    $usersScroll = New-Object Windows.Controls.ScrollViewer
+    $usersScroll.Content = $usersList
+    $usersScroll.VerticalScrollBarVisibility = 'Auto'
+    foreach ($user in $profiles) {
+        $row = New-Object Windows.Controls.StackPanel
+        $row.Orientation = 'Horizontal'
+        $row.Margin = '0,0,0,4'
+        $avatar = New-Object Windows.Controls.Image
+        $avatar.Width = 32; $avatar.Height = 32; $avatar.Margin = '0,0,8,0'
+        if ($user.avatar -and (Test-Path $user.avatar)) {
+            $bmp = New-Object Windows.Media.Imaging.BitmapImage
+            $bmp.BeginInit(); $bmp.UriSource = [Uri]::new((Resolve-Path $user.avatar)); $bmp.DecodePixelWidth = 32; $bmp.EndInit()
+            $avatar.Source = $bmp
+        }
+        $row.Children.Add($avatar)
+        $info = New-Object Windows.Controls.TextBlock
+        $info.Text = "$($user.username) | $($user.machineId) | $($user.created) | Admin: $($user.isAdmin)"
+        $info.Foreground = [Windows.Media.Brushes]::White
+        $info.VerticalAlignment = 'Center'
+        $row.Children.Add($info)
+        $revokeBtn = New-Object Windows.Controls.Button
+        $revokeBtn.Content = 'Revoke'
+        $revokeBtn.Margin = '8,0,0,0'
+        $revokeBtn.Style = $window.Resources['DangerButton']
+        $revokeBtn.IsEnabled = ($user.isAdmin -ne $true) -and ($user.isSuperAdmin -ne $true)
+        $row.Children.Add($revokeBtn)
+        # Add Make Admin button if current user is super admin and target is not admin
+        if ($global:profile.isSuperAdmin -eq $true -and ($user.isAdmin -ne $true)) {
+            $makeAdminBtn = New-Object Windows.Controls.Button
+            $makeAdminBtn.Content = 'Make Admin'
+            $makeAdminBtn.Margin = '8,0,0,0'
+            $makeAdminBtn.Style = $window.Resources['NeonButton']
+            $makeAdminBtn.Add_Click({
+                $user.isAdmin = $true
+                Save-JsonFile $profilesPath $profiles
+                [System.Windows.MessageBox]::Show("$($user.username) is now an admin.")
+                Show-AdminDashboard
+            })
+            $row.Children.Add($makeAdminBtn)
+        }
+        $usersList.Children.Add($row)
+    }
+    $panel.Children.Add($usersScroll)
+
+    # Keys Section
+    $keysTitle = New-Object Windows.Controls.TextBlock
+    $keysTitle.Text = 'Keys:'
+    $keysTitle.FontSize = 20
+    $keysTitle.FontWeight = 'Bold'
+    $keysTitle.Foreground = [Windows.Media.Brushes]::White
+    $keysTitle.Margin = '0,12,0,4'
+    $panel.Children.Add($keysTitle)
+
+    $keysPath = "./keys.json"
+    if (-not (Test-Path $keysPath)) { $keysPath = "./keys_template.json" }
+    $keys = Load-JsonFile $keysPath
+    $keysList = New-Object Windows.Controls.StackPanel
+    $keysList.Orientation = 'Vertical'
+    $keysList.MaxHeight = 180
+    $keysList.Margin = '0,0,0,8'
+    $keysList.Background = [Windows.Media.Brushes]::Transparent
+    $keysScroll = New-Object Windows.Controls.ScrollViewer
+    $keysScroll.Content = $keysList
+    $keysScroll.VerticalScrollBarVisibility = 'Auto'
+    foreach ($key in $keys) {
+        $row = New-Object Windows.Controls.StackPanel
+        $row.Orientation = 'Horizontal'
+        $row.Margin = '0,0,0,4'
+        $info = New-Object Windows.Controls.TextBlock
+        $info.Text = "$($key.key) | Used: $($key.used) | By: $($key.usedBy)"
+        $info.Foreground = [Windows.Media.Brushes]::White
+        $info.VerticalAlignment = 'Center'
+        $row.Children.Add($info)
+        $revokeBtn = New-Object Windows.Controls.Button
+        $revokeBtn.Content = 'Revoke'
+        $revokeBtn.Margin = '8,0,0,0'
+        $revokeBtn.Style = $window.Resources['DangerButton']
+        $revokeBtn.IsEnabled = $key.used -eq $false
+        $row.Children.Add($revokeBtn)
+        $keysList.Children.Add($row)
+    }
+    $panel.Children.Add($keysScroll)
+
+    # Update Button
+    $updateBtn = New-Object Windows.Controls.Button
+    $updateBtn.Content = 'Update (Push to GitHub)'
+    $updateBtn.Style = $window.Resources['NeonButton']
+    $updateBtn.Margin = '0,16,0,0'
+    $panel.Children.Add($updateBtn)
+
+    $scroll.Content = $panel
+    $main.Children.Add($scroll)
+}
+
 # Navigation logic
+$isAdmin = $false
+if ($profile -and $profile.isAdmin -eq $true) { $isAdmin = $true }
+
 $sidebar = @(
     @{Btn='HomeTab'; Show={ Show-Home }},
     @{Btn='InputDelayTab'; Show={ Show-Placeholder 'Input Delay Tweaks' }},
@@ -358,6 +491,20 @@ $sidebar = @(
     @{Btn='ControllerTab'; Show={ Show-Placeholder 'Controller Tweaks' }},
     @{Btn='UtilSettingsTab'; Show={ Show-Placeholder 'Util Settings' }}
 )
+if ($isAdmin) {
+    $sidebar += @{Btn='AdminTab'; Show={ Show-AdminDashboard }}
+    # Add AdminTab button to UI
+    $adminBtn = New-Object Windows.Controls.Button
+    $adminBtn.Name = 'AdminTab'
+    $adminBtn.Content = '[A] Admin'
+    $adminBtn.Style = $window.Resources['TabButton']
+    $adminBtn.Margin = '4,8,4,8'
+    $adminBtn.Padding = '20,8'
+    $adminBtn.MinWidth = 160
+    $adminBtn.Add_Click({ Show-AdminDashboard })
+    $tabBar = $window.Content.Children[0] # Top StackPanel
+    $tabBar.Children.Add($adminBtn)
+}
 foreach ($item in $sidebar) {
     $btn = $window.FindName($item.Btn)
     $localShow = $item.Show
@@ -498,6 +645,12 @@ if (-not $profile) {
     Show-SignUpWindow
     $profile = Get-CurrentProfile
     if (-not $profile) { exit }
+}
+
+# Super Admin protection at startup
+if (-not $global:profile -or $global:profile.isSuperAdmin -ne $true) {
+    [System.Windows.MessageBox]::Show('Critical: Super admin profile missing or altered! Exiting for security.')
+    exit
 }
 
 # Initial state
