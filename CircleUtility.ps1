@@ -366,6 +366,140 @@ foreach ($item in $sidebar) {
     })
 }
 
+# Helper: Load/Save JSON
+function Load-JsonFile($path) {
+    if (Test-Path $path) {
+        Get-Content $path -Raw | ConvertFrom-Json
+    } else {
+        @()
+    }
+}
+function Save-JsonFile($path, $data) {
+    $data | ConvertTo-Json -Depth 5 | Set-Content $path
+}
+
+# Sign-Up/Profile Creation Window (WPF/XAML)
+function Show-SignUpWindow {
+    $signupXaml = @"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        Title="Sign Up" Height="420" Width="350" WindowStartupLocation="CenterScreen" Background="#181A20">
+    <Grid Margin="20">
+        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Width="280" >
+            <TextBlock Text="Sign Up" FontSize="24" Foreground="#39FF14" FontWeight="Bold" HorizontalAlignment="Center" Margin="0,0,0,8"/>
+            <TextBlock Text="One-Time Key" Foreground="White"/>
+            <TextBox Name="KeyBox" Height="30" Background="#23272F" Foreground="White" BorderBrush="#39FF14"/>
+            <TextBlock Text="Username" Foreground="White" Margin="0,8,0,0"/>
+            <TextBox Name="UsernameBox" Height="30" Background="#23272F" Foreground="White" BorderBrush="#39FF14"/>
+            <TextBlock Text="Avatar (optional)" Foreground="White" Margin="0,8,0,0"/>
+            <Button Name="AvatarButton" Content="Choose Avatar" Height="30" Background="#23272F" Foreground="#39FF14" Margin="0,0,0,4"/>
+            <Image Name="AvatarPreview" Height="60" Width="60" Margin="0,0,0,8"/>
+            <Button Name="SubmitButton" Content="Create Profile" Height="35" Background="#39FF14" Foreground="Black" FontWeight="Bold"/>
+            <TextBlock Name="StatusText" Foreground="Red" FontWeight="Bold" TextAlignment="Center" Margin="0,8,0,0"/>
+        </StackPanel>
+    </Grid>
+</Window>
+"@
+    $sr = New-Object System.IO.StringReader $signupXaml
+    $xr = [System.Xml.XmlReader]::Create($sr)
+    $signupWindow = [Windows.Markup.XamlReader]::Load($xr)
+    $KeyBox = $signupWindow.FindName('KeyBox')
+    $UsernameBox = $signupWindow.FindName('UsernameBox')
+    $AvatarButton = $signupWindow.FindName('AvatarButton')
+    $AvatarPreview = $signupWindow.FindName('AvatarPreview')
+    $SubmitButton = $signupWindow.FindName('SubmitButton')
+    $StatusText = $signupWindow.FindName('StatusText')
+    $avatarPath = $null
+
+    # Avatar selection logic
+    $AvatarButton.Add_Click({
+        $ofd = New-Object System.Windows.Forms.OpenFileDialog
+        $ofd.Filter = "Image Files (*.png;*.jpg;*.jpeg)|*.png;*.jpg;*.jpeg"
+        if ($ofd.ShowDialog() -eq 'OK') {
+            $avatarPath = $ofd.FileName
+            $bmp = New-Object Windows.Media.Imaging.BitmapImage
+            $bmp.BeginInit()
+            $bmp.UriSource = [Uri]::new($avatarPath)
+            $bmp.DecodePixelWidth = 60
+            $bmp.EndInit()
+            $AvatarPreview.Source = $bmp
+        }
+    })
+
+    # Submit logic
+    $SubmitButton.Add_Click({
+        $key = $KeyBox.Text.Trim()
+        $username = $UsernameBox.Text.Trim()
+        $StatusText.Text = ""
+        $keysPath = "./keys.json"
+        $profilesPath = "./profiles.json"
+        if (-not (Test-Path $keysPath)) { $keysPath = "./keys_template.json" }
+        if (-not (Test-Path $profilesPath)) { $profilesPath = "./profiles_template.json" }
+        $keys = Load-JsonFile $keysPath
+        $profiles = Load-JsonFile $profilesPath
+        # Validate key
+        $keyObj = $keys | Where-Object { $_.key -eq $key -and $_.used -eq $false }
+        if (-not $keyObj) {
+            $StatusText.Text = "Invalid or already used key."
+            return
+        }
+        # Validate username
+        if ($profiles | Where-Object { $_.username -eq $username }) {
+            $StatusText.Text = "Username already taken."
+            return
+        }
+        if ($username.Length -lt 3) {
+            $StatusText.Text = "Username too short."
+            return
+        }
+        # Save avatar if selected
+        $avatarRelPath = $null
+        if ($avatarPath) {
+            $avatarsDir = "./avatars"
+            if (-not (Test-Path $avatarsDir)) { New-Item -ItemType Directory -Path $avatarsDir | Out-Null }
+            $ext = [System.IO.Path]::GetExtension($avatarPath)
+            $avatarRelPath = "$avatarsDir/$username$ext"
+            Copy-Item $avatarPath $avatarRelPath -Force
+        }
+        # Create profile
+        $profile = [PSCustomObject]@{
+            username = $username
+            machineId = (Get-WmiObject -Class Win32_ComputerSystemProduct).UUID
+            avatar = $avatarRelPath
+            isAdmin = $false
+            created = (Get-Date).ToString("o")
+        }
+        $profiles += $profile
+        # Mark key as used
+        $keyObj.used = $true
+        $keyObj.usedBy = $username
+        # Save
+        Save-JsonFile $profilesPath $profiles
+        Save-JsonFile $keysPath $keys
+        $StatusText.Foreground = 'Green'
+        $StatusText.Text = "Profile created! You can now sign in."
+        Start-Sleep -Seconds 1.5
+        $signupWindow.Close()
+    })
+    $signupWindow.ShowDialog() | Out-Null
+}
+
+# Check for existing profile (simple: by machineId)
+function Get-CurrentProfile {
+    $profilesPath = "./profiles.json"
+    if (-not (Test-Path $profilesPath)) { $profilesPath = "./profiles_template.json" }
+    $profiles = Load-JsonFile $profilesPath
+    $machineId = (Get-WmiObject -Class Win32_ComputerSystemProduct).UUID
+    return $profiles | Where-Object { $_.machineId -eq $machineId }
+}
+
+# Main entry: show sign-up if no profile, else continue
+$profile = Get-CurrentProfile
+if (-not $profile) {
+    Show-SignUpWindow
+    $profile = Get-CurrentProfile
+    if (-not $profile) { exit }
+}
+
 # Initial state
 Show-Home
 Start-NeonPulse ($window.FindName('MainBorder'))
